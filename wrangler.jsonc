@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bald-annual-awards",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-16",
+  "workers_dev": true,
+  "r2_buckets": [
+    { "binding": "BALLOTS", "bucket_name": "bald-awards-ballots" }
+  ]
+}
