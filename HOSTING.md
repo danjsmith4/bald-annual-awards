@@ -44,7 +44,11 @@ Each secret command prompts for its value. For updates, edit `worker/index.js` a
 
 ## Vote records
 
-View or download the private JSON ballots through the R2 dashboard. The site has no results/admin page yet. A second submission in the same authenticated session replaces that session's ballot. Shared passphrases do not prevent someone from submitting again after clearing cookies or using another browser.
+Open `/admin` on your site or use the Admin link in the footer. Add `ADMIN_PASSPHRASE` as a separate Cloudflare Worker Secret under Settings > Variables and Secrets, then deploy the change. Use a different passphrase from the customer and booster passwords. Admin access stays disabled until this secret is set.
+
+The admin panel shows leaders and ties for every category, counts for all nominees, ballot totals, and a searchable table of every individual vote with voter name, ballot group, and submission time. Use Refresh votes to fetch all saved ballots. The table is paginated in groups of 50 votes; every saved vote is accessible. Admin sessions last eight hours; changing ADMIN_PASSPHRASE invalidates existing admin sessions.
+
+Nominee capitalization and repeated spaces are grouped in totals. Other spelling differences remain separate. View or download the original private JSON ballots through R2. A second submission in the same authenticated session replaces that session's ballot. Shared passphrases do not prevent someone from submitting again after clearing cookies or using another browser.
 
 ## Official references
 
