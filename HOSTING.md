@@ -50,7 +50,7 @@ This deployment supports private login configuration in R2 at `_settings/auth-v1
 
 When private login configuration is present, Cloudflare environment secrets are optional. An explicitly configured runtime passphrase or session secret takes precedence over the stored setting. The one-time provisioning endpoint is removed from the source after initial setup. Do not delete the `_settings` object during routine ballot exports or cleanup.
 
-Open `/admin` on your site or use the Admin link in the footer. Add `ADMIN_PASSPHRASE` as a separate Cloudflare Worker Secret under Settings > Variables and Secrets, then deploy the change. Use a different passphrase from the customer and booster passwords. Admin access stays disabled until this secret is set.
+Open `/admin` on your site or use the Admin link in the footer, and sign in with your provisioned admin password. To override the stored admin password, optionally add `ADMIN_PASSPHRASE` as a separate Cloudflare Worker Secret under Settings > Variables and Secrets and deploy the change. Use a different passphrase from the customer and booster passwords. Admin access requires either the provisioned private configuration or the appropriate runtime secrets.
 
 The admin panel shows leaders and ties for every category, counts for all nominees, ballot totals, and a searchable table of every individual vote with voter name, ballot group, and submission time. Use Refresh votes to fetch all saved ballots. The table is paginated in groups of 50 votes; every saved vote is accessible. Admin sessions last eight hours; changing ADMIN_PASSPHRASE invalidates existing admin sessions.
 

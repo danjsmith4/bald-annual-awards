@@ -15,7 +15,6 @@ const { default: worker } = await import('../worker/index.js');
 import { tally } from '../worker/admin.js';
 import vm from 'node:vm';
 import { resolveBindings } from '../worker/bindings.js';
-import { provisionAuth } from '../worker/auth-store.js';
 
 function fixture() {
   const records = new Map();
@@ -151,19 +150,19 @@ test('binding accessors are read using the original runtime object', () => {
   assert.equal(resolveBindings(env).ADMIN_PASSPHRASE, 'test-admin');
 });
 
-test('private stored auth enables all logins without environment secrets; setup is authorized and one-time', async () => {
+test('private stored auth enables all logins without environment secrets; provisioning has been removed', async () => {
   const { env, records, call } = fixture();
   for (const name of ['ADMIN_PASSPHRASE', 'SESSION_SECRET', 'BOOSTER_PASSPHRASE', 'CUSTOMER_PASSPHRASE']) delete env[name];
-  const token = 'disposable-test-only-bootstrap-token';
-  const tokenHash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
   const passwords = { ADMIN_PASSPHRASE: 'test-admin-password', BOOSTER_PASSPHRASE: 'test-booster-password', CUSTOMER_PASSPHRASE: 'test-customer-password' };
-  const make = (auth = token, origin = 'https://awards.test') => new Request('https://awards.test/api/internal/provision-auth', { method: 'POST', headers: { origin, authorization: 'Bearer ' + auth, 'Content-Type': 'application/json' }, body: JSON.stringify(passwords) });
-  const options = { tokenHash, expires: Date.now() + 60000 };
-  assert.equal((await provisionAuth(make('wrong'), env, options)).status, 401);
-  assert.equal((await provisionAuth(make(token, 'https://other.test'), env, options)).status, 403);
-  assert.equal((await provisionAuth(make(), env, { tokenHash, expires: 1 })).status, 401);
-  assert.equal((await provisionAuth(make(), env, options)).status, 200);
-  assert.equal((await provisionAuth(make(), env, options)).status, 409);
+  const credentials = {};
+  for (const [name,password] of Object.entries(passwords)) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+    const hash = await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:100000,hash:'SHA-256'},material,256);
+    credentials[name] = {salt:Buffer.from(salt).toString('hex'),hash:Buffer.from(hash).toString('hex')};
+  }
+  records.set('_settings/auth-v1.json', {version:1,credentials,sessionSecret:Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex')});
+  assert.equal((await call('/api/internal/provision-auth', {})).status, 404);
   const stored = JSON.stringify([...records.values()]);
   for (const password of Object.values(passwords)) assert(!stored.includes(password));
   const status = await (await call('/api/admin/session')).json();

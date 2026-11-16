@@ -3,9 +3,6 @@ const encoder = new TextEncoder();
 const hex = bytes => Array.from(new Uint8Array(bytes), x => x.toString(16).padStart(2, '0')).join('');
 const bytes = value => Uint8Array.from(value.match(/../g), x => parseInt(x, 16));
 const fields = ['ADMIN_PASSPHRASE', 'BOOSTER_PASSPHRASE', 'CUSTOMER_PASSPHRASE'];
-const recoveryHash = '13bbf497afc16695c6b04ebdbc22b99bcb360f8d4a924debf9a32c2afbe63fe7';
-const recoveryExpires = Date.parse('2026-11-18T23:59:59Z');
-const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 
 async function derive(password, salt) {
   const material = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
@@ -47,25 +44,3 @@ export async function verifyPassphrase(password, env, name) {
   return credential ? equal(await derive(password, credential.salt), credential.hash) : equal(password, env[name]);
 }
 
-// One-time, expiring recovery. Only a token's SHA-256 digest is in the source.
-// The token itself and password values are never committed or returned by APIs.
-export async function provisionAuth(req, env, { tokenHash = recoveryHash, expires = recoveryExpires } = {}) {
-  const url = new URL(req.url);
-  if (req.method !== 'POST') return reply({ error: 'Not found.' }, 404);
-  if (req.headers.get('origin') !== url.origin) return reply({ error: 'Request not allowed.' }, 403);
-  const token = req.headers.get('authorization')?.replace(/^Bearer /, '') || '';
-  if (Date.now() > expires || !equal(hex(await crypto.subtle.digest('SHA-256', encoder.encode(token))), tokenHash)) return reply({ error: 'Not authorized.' }, 401);
-  if (!env.BALLOTS) return reply({ error: 'Private storage unavailable.' }, 503);
-  if (await env.BALLOTS.get(key)) return reply({ error: 'Authentication is already configured. Recovery is disabled.' }, 409);
-  const body = await req.json();
-  if (fields.some(name => typeof body[name] !== 'string' || body[name].length < 12 || body[name].length > 200)) return reply({ error: 'Every password must be 12-200 characters.' }, 400);
-  const credentials = {};
-  for (const name of fields) {
-    const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
-    credentials[name] = { salt, hash: await derive(body[name], salt) };
-  }
-  const config = { version: 1, credentials, sessionSecret: hex(crypto.getRandomValues(new Uint8Array(32))), createdAt: new Date().toISOString() };
-  const result = await env.BALLOTS.put(key, JSON.stringify(config), { onlyIf: new Headers({ 'If-None-Match': '*' }), httpMetadata: { contentType: 'application/json', cacheControl: 'private, no-store' } });
-  if (!result) return reply({ error: 'Authentication was configured by another request. Recovery is disabled.' }, 409);
-  return reply({ ok: true });
-}
