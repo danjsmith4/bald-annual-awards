@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
 import { tally } from '../worker/admin.js';
 import vm from 'node:vm';
+import { resolveBindings } from '../worker/bindings.js';
 
 function fixture() {
   const records = new Map();
@@ -81,6 +82,36 @@ test('configuration errors identify the exact missing secret without revealing v
   delete env.SESSION_SECRET;
   status = await (await call('/api/admin/session')).json();
   assert.deepEqual(status.missingSecrets, ['ADMIN_PASSPHRASE', 'SESSION_SECRET']);
+});
+
+test('dashboard secret names with spaces and invisible characters work through the actual Worker entrypoint', async () => {
+  const { env, call } = fixture();
+  env[' ADMIN_PASSPHRASE '] = env.ADMIN_PASSPHRASE;
+  env['\u200BSESSION_SECRET\u00A0'] = env.SESSION_SECRET;
+  delete env.ADMIN_PASSPHRASE;
+  delete env.SESSION_SECRET;
+  const status = await (await call('/api/admin/session')).json();
+  assert.equal(status.configured, true);
+  assert.deepEqual(status.secretStatus, { ADMIN_PASSPHRASE: 'available', SESSION_SECRET: 'available' });
+  assert.equal(status.build, 'binding-resolution-v2');
+  assert.equal(status.voteStorageBound, true);
+  const login = await call('/api/admin/login', { password: 'test-admin' });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  assert.equal((await call('/api/admin/votes', undefined, cookie)).status, 200);
+  assert.equal((await call('/api/login', { role: 'booster', password: 'test-booster' })).status, 200);
+});
+
+test('binding resolution preserves exact names and secret values and rejects ambiguous aliases', async () => {
+  assert.equal(resolveBindings({ ADMIN_PASSPHRASE: 'exact', ' ADMIN_PASSPHRASE ': 'alias' }).ADMIN_PASSPHRASE, 'exact');
+  assert.equal(resolveBindings({ ' ADMIN_PASSPHRASE ': ' value with spaces ' }).ADMIN_PASSPHRASE, ' value with spaces ');
+  assert.equal(resolveBindings({ ' ADMIN_PASSPHRASE': 'a', 'ADMIN_PASSPHRASE ': 'b' }).ADMIN_PASSPHRASE, undefined);
+  const { env, call } = fixture();
+  env.ADMIN_PASSPHRASE = '';
+  const status = await (await call('/api/admin/session')).json();
+  assert.equal(status.configured, false);
+  assert.equal(status.secretStatus.ADMIN_PASSPHRASE, 'empty');
+  assert.equal((await call('/api/admin/login', { password: '' })).status, 503);
 });
 
 test('pagination returns every stored ballot, tallies normalize case/spacing, detect ties, and separate voter groups', async () => {
@@ -173,4 +204,3 @@ test('dashboard renders leaders, every vote, search and table pagination without
   assert.equal(nodes.get('votes-body').children.length, 30);
   assert.equal(nodes.get('page-label').textContent, 'Page 1 of 1');
 });
-

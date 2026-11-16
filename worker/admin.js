@@ -1,3 +1,4 @@
+import { bindingStatus } from './bindings.js';
 const YEAR = 2026;
 const AWARDS = [
   ['booster', 'Boosters Booster of the Year'],
@@ -14,12 +15,12 @@ const cookieFlags = '; HttpOnly; Secure; SameSite=Strict; Path=/api/admin/';
 const reply = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
 });
-const missingSecrets = env => ['ADMIN_PASSPHRASE', 'SESSION_SECRET'].filter(name => !env[name]);
+const missingSecrets = env => Object.entries(bindingStatus(env)).filter(([, status]) => status !== 'available').map(([name]) => name);
 async function key(env) {
   return crypto.subtle.importKey('raw', encoder.encode(env.SESSION_SECRET + ':' + env.ADMIN_PASSPHRASE), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 async function isAdmin(req, env) {
-  if (!env.ADMIN_PASSPHRASE || !env.SESSION_SECRET) return false;
+  if (missingSecrets(env).length) return false;
   const token = (req.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
   if (!token) return false;
   const parts = token.split('.');
@@ -38,7 +39,7 @@ export async function handleAdminRequest(req, env, publicPage) {
     } });
   }
   if (req.method === 'POST' && req.headers.get('origin') !== url.origin) return reply({ error: 'Request not allowed.' }, 403);
-  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env) });
+  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env), secretStatus: bindingStatus(env), voteStorageBound: !!env.BALLOTS, build: 'binding-resolution-v2' });
   if (url.pathname === '/api/admin/login' && req.method === 'POST') {
     if (missingSecrets(env).length) return reply({ error: 'Missing Worker secrets: ' + missingSecrets(env).join(', ') + '. Add them under Settings > Variables and Secrets, then deploy.' }, 503);
     const { password } = await req.json();
