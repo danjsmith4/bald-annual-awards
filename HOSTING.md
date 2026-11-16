@@ -44,6 +44,12 @@ Each secret command prompts for its value. For updates, edit `worker/index.js` a
 
 ## Vote records
 
+### Private login configuration
+
+This deployment supports private login configuration in R2 at `_settings/auth-v1.json`. Passwords are stored as independently salted PBKDF2-SHA256 hashes (100,000 iterations), and the session signing secret is randomly generated. This object is server-only and never served by a public endpoint. Keep the R2 bucket private. Authentication configuration is separate from ballots under `2026/`, so it is excluded from vote lists and totals.
+
+When private login configuration is present, Cloudflare environment secrets are optional. An explicitly configured runtime passphrase or session secret takes precedence over the stored setting. The one-time provisioning endpoint is removed from the source after initial setup. Do not delete the `_settings` object during routine ballot exports or cleanup.
+
 Open `/admin` on your site or use the Admin link in the footer. Add `ADMIN_PASSPHRASE` as a separate Cloudflare Worker Secret under Settings > Variables and Secrets, then deploy the change. Use a different passphrase from the customer and booster passwords. Admin access stays disabled until this secret is set.
 
 The admin panel shows leaders and ties for every category, counts for all nominees, ballot totals, and a searchable table of every individual vote with voter name, ballot group, and submission time. Use Refresh votes to fetch all saved ballots. The table is paginated in groups of 50 votes; every saved vote is accessible. Admin sessions last eight hours; changing ADMIN_PASSPHRASE invalidates existing admin sessions.

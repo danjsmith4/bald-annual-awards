@@ -15,6 +15,7 @@ const { default: worker } = await import('../worker/index.js');
 import { tally } from '../worker/admin.js';
 import vm from 'node:vm';
 import { resolveBindings } from '../worker/bindings.js';
+import { provisionAuth } from '../worker/auth-store.js';
 
 function fixture() {
   const records = new Map();
@@ -22,7 +23,11 @@ function fixture() {
     ADMIN_PASSPHRASE: 'test-admin', SESSION_SECRET: 'test-signing-secret',
     BOOSTER_PASSPHRASE: 'test-booster', CUSTOMER_PASSPHRASE: 'test-customer',
     BALLOTS: {
-      async put(k, v) { records.set(k, JSON.parse(v)); },
+      async put(k, v, options = {}) {
+        if (options.onlyIf?.get('If-None-Match') === '*' && records.has(k)) return null;
+        records.set(k, JSON.parse(v));
+        return { etag: 'test-etag' };
+      },
       async list({ prefix, cursor, limit }) {
         const keys = [...records.keys()].filter(k => k.startsWith(prefix)).sort();
         const start = Number(cursor || 0);
@@ -104,7 +109,7 @@ test('dashboard secret names with spaces and invisible characters work through t
   const status = await (await call('/api/admin/session')).json();
   assert.equal(status.configured, true);
   assert.deepEqual(status.secretStatus, { ADMIN_PASSPHRASE: 'available', SESSION_SECRET: 'available' });
-  assert.equal(status.build, 'native-bindings-v3');
+  assert.equal(status.build, 'stored-auth-v4');
   assert.equal(status.voteStorageBound, true);
   const login = await call('/api/admin/login', { password: 'test-admin' });
   assert.equal(login.status, 200);
@@ -144,6 +149,41 @@ test('binding accessors are read using the original runtime object', () => {
   const env = {};
   Object.defineProperty(env, 'ADMIN_PASSPHRASE', { get() { assert.equal(this, env); return 'test-admin'; } });
   assert.equal(resolveBindings(env).ADMIN_PASSPHRASE, 'test-admin');
+});
+
+test('private stored auth enables all logins without environment secrets; setup is authorized and one-time', async () => {
+  const { env, records, call } = fixture();
+  for (const name of ['ADMIN_PASSPHRASE', 'SESSION_SECRET', 'BOOSTER_PASSPHRASE', 'CUSTOMER_PASSPHRASE']) delete env[name];
+  const token = 'disposable-test-only-bootstrap-token';
+  const tokenHash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
+  const passwords = { ADMIN_PASSPHRASE: 'test-admin-password', BOOSTER_PASSPHRASE: 'test-booster-password', CUSTOMER_PASSPHRASE: 'test-customer-password' };
+  const make = (auth = token, origin = 'https://awards.test') => new Request('https://awards.test/api/internal/provision-auth', { method: 'POST', headers: { origin, authorization: 'Bearer ' + auth, 'Content-Type': 'application/json' }, body: JSON.stringify(passwords) });
+  const options = { tokenHash, expires: Date.now() + 60000 };
+  assert.equal((await provisionAuth(make('wrong'), env, options)).status, 401);
+  assert.equal((await provisionAuth(make(token, 'https://other.test'), env, options)).status, 403);
+  assert.equal((await provisionAuth(make(), env, { tokenHash, expires: 1 })).status, 401);
+  assert.equal((await provisionAuth(make(), env, options)).status, 200);
+  assert.equal((await provisionAuth(make(), env, options)).status, 409);
+  const stored = JSON.stringify([...records.values()]);
+  for (const password of Object.values(passwords)) assert(!stored.includes(password));
+  const status = await (await call('/api/admin/session')).json();
+  assert.equal(status.configured, true);
+  assert.equal(status.bindingSources.ADMIN_PASSPHRASE, 'private-storage');
+  assert.equal((await call('/api/admin/login', { password: 'wrong' })).status, 401);
+  const admin = await call('/api/admin/login', { password: passwords.ADMIN_PASSPHRASE });
+  assert.equal(admin.status, 200);
+  assert.equal((await call('/api/admin/votes', undefined, admin.headers.get('set-cookie').split(';')[0])).status, 200);
+  for (const role of ['booster', 'customer']) {
+    const login = await call('/api/login', { role, password: passwords[role === 'booster' ? 'BOOSTER_PASSPHRASE' : 'CUSTOMER_PASSPHRASE'] });
+    assert.equal(login.status, 200);
+    const data = await login.json();
+    assert.equal((await call('/api/vote', { name: role, answers: data.categories.map(category => category.includes('Moment') ? data.momentOptions[0] : 'Nominee') }, login.headers.get('set-cookie').split(';')[0])).status, 200);
+  }
+  const publicPage = await (await call('/')).text();
+  assert(!publicPage.includes(passwords.ADMIN_PASSPHRASE));
+  assert.equal([...records.keys()].filter(k => k.startsWith('2026/')).length, 2);
+  env.ADMIN_PASSPHRASE = 'native-admin';
+  assert.equal((await call('/api/admin/login', { password: 'native-admin' })).status, 200);
 });
 
 test('pagination returns every stored ballot, tallies normalize case/spacing, detect ties, and separate voter groups', async () => {

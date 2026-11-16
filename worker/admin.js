@@ -1,4 +1,5 @@
 import { bindingStatus } from './bindings.js';
+import { verifyPassphrase } from './auth-store.js';
 const YEAR = 2026;
 const AWARDS = [
   ['booster', 'Boosters Booster of the Year'],
@@ -39,11 +40,11 @@ export async function handleAdminRequest(req, env, publicPage) {
     } });
   }
   if (req.method === 'POST' && req.headers.get('origin') !== url.origin) return reply({ error: 'Request not allowed.' }, 403);
-  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env), secretStatus: bindingStatus(env), voteStorageBound: !!env.BALLOTS, bindingSources: env.__bindingSources || {}, build: 'native-bindings-v3' });
+  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env), secretStatus: bindingStatus(env), voteStorageBound: !!env.BALLOTS, bindingSources: env.__bindingSources || {}, build: 'stored-auth-v4' });
   if (url.pathname === '/api/admin/login' && req.method === 'POST') {
     if (missingSecrets(env).length) return reply({ error: 'Missing Worker secrets: ' + missingSecrets(env).join(', ') + '. Add them under Settings > Variables and Secrets, then deploy.' }, 503);
     const { password } = await req.json();
-    if (typeof password !== 'string' || password !== env.ADMIN_PASSPHRASE) return reply({ error: 'Incorrect admin passphrase.' }, 401);
+    if (!(await verifyPassphrase(password, env, 'ADMIN_PASSPHRASE'))) return reply({ error: 'Incorrect admin passphrase.' }, 401);
     const payload = crypto.randomUUID() + '.' + (Date.now() + 8 * 60 * 60 * 1000);
     const signature = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', await key(env), encoder.encode(payload)))).map(x => x.toString(16).padStart(2, '0')).join('');
     return reply({ ok: true }, 200, { 'Set-Cookie': cookieName + '=' + payload + '.' + signature + cookieFlags + '; Max-Age=28800' });
