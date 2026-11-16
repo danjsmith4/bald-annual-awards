@@ -56,8 +56,19 @@ The admin panel shows leaders and ties for every category, counts for all nomine
 
 Nominee capitalization and repeated spaces are grouped in totals. Other spelling differences remain separate. View or download the original private JSON ballots through R2. A second submission in the same authenticated session replaces that session's ballot. Shared passphrases do not prevent someone from submitting again after clearing cookies or using another browser.
 
+## Discord member nominations
+
+In `/admin`, open Discord connection. Enter the server ID, a bot token, and the Booster, Staff, Developer, and Customer role IDs. Multiple role IDs can be comma-separated. The bot must already be a member of the server and must have Server Members Intent enabled in the Discord Developer Portal. Do not paste bot tokens into chat or commit them to GitHub.
+
+Save and sync members. The sync follows all Discord member pages and excludes bot accounts. To include all human members in a group, use the server ID (the @everyone role ID) for that group. Use Refresh Discord members after roles or server memberships change. Role eligibility is also rechecked against Discord when a vote is submitted.
+
+Once configuration and sync are complete, person awards use a search field and a required member selector. Votes store the Discord user ID, username, and display-name snapshot; totals group by Discord user ID even if names change. Customer ballots receive only Booster and Staff nominee lists. The moment award keeps its existing dropdown. Legacy write-in votes stay visible and are not automatically merged with Discord-ID votes.
+
+The bot token is encrypted with AES-GCM before being written to the private R2 settings object and is never returned by the API. Changing the session signing secret requires re-entering the bot token. The integration only reads server roles and members: it does not send messages, assign roles, or log voters into Discord. Existing voting continues unchanged until Discord settings are saved; after saving, finish the sync to enable nominees.
+
 ## Official references
 
 - https://developers.cloudflare.com/workers/get-started/dashboard/
 - https://developers.cloudflare.com/workers/configuration/secrets/
 - https://developers.cloudflare.com/r2/get-started/workers-api/
+- https://docs.discord.com/developers/resources/guild#list-guild-members

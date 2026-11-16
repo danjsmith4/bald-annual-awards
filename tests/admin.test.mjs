@@ -15,6 +15,7 @@ const { default: worker } = await import('../worker/index.js');
 import { tally } from '../worker/admin.js';
 import vm from 'node:vm';
 import { resolveBindings } from '../worker/bindings.js';
+import { adminDiscord, nomineeLists, resolveNominees } from '../worker/discord.js';
 
 function fixture() {
   const records = new Map();
@@ -274,4 +275,72 @@ test('dashboard renders leaders, every vote, search and table pagination without
   nodes.get('search').oninput();
   assert.equal(nodes.get('votes-body').children.length, 30);
   assert.equal(nodes.get('page-label').textContent, 'Page 1 of 1');
+});
+
+test('Discord settings and members are protected by admin and voter authentication', async () => {
+  const { call } = fixture();
+  assert.equal((await call('/api/admin/discord')).status,401);
+  assert.equal((await call('/api/admin/discord',{})).status,401);
+  assert.equal((await call('/api/admin/discord/sync',{})).status,401);
+  assert.equal((await call('/api/nominees')).status,401);
+});
+
+test('Discord role sync pages all members, excludes bots, protects token, and validates selections by stable ID', async () => {
+  const { env, records } = fixture();
+  const guildId='10000000000000001';
+  const roleIds={booster:['20000000000000001'],staff:['20000000000000002'],developer:['20000000000000003'],customer:['20000000000000004']};
+  const token='test-discord-bot-token-not-real';
+  const people=Array.from({length:1001},(_,i)=>({user:{id:String(30000000000000000n+BigInt(i)),username:'user'+i,global_name:i===0?'Zamin':'Member '+i,bot:i===1},nick:i===0?'Abdullah':null,roles:Object.values(roleIds).flat()}));
+  const calls=[];
+  let rejectRole=false;
+  const fetcher=async(url,options)=>{
+    assert(url.startsWith('https://discord.com/api/v10/guilds/'+guildId));
+    assert.equal(options.headers.Authorization,'Bot '+token);
+    calls.push(url);
+    if(url.endsWith('/roles'))return Response.json(Object.values(roleIds).flat().map(id=>({id})));
+    if(url.includes('/members?'))return Response.json(url.endsWith('after=0')?people.slice(0,1000):people.slice(1000));
+    const member=people.find(p=>url.endsWith('/members/'+p.user.id));
+    return Response.json({...member,roles:rejectRole?[]:member.roles});
+  };
+  const req=(path,body)=>new Request('https://awards.test/api/admin/'+path,{method:body?'POST':'GET',headers:{origin:'https://awards.test','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  const configured=await adminDiscord(req('discord',{guildId,roleIds,token}),env,fetcher);
+  assert.equal(configured.status,200);
+  const serialized=JSON.stringify([...records.values()]);
+  assert(!serialized.includes(token));
+  let page=await(await adminDiscord(req('discord/sync',{restart:true}),env,fetcher)).json();
+  assert.equal(page.done,false);
+  assert.equal(page.scanned,1000);
+  await assert.rejects(()=>nomineeLists(env,'booster'),/not ready/);
+  page=await(await adminDiscord(req('discord/sync',{restart:false}),env,fetcher)).json();
+  assert.equal(page.done,true);
+  assert.equal(page.scanned,1001);
+  assert.equal(page.counts.booster,1000);
+  const customerList=await nomineeLists(env,'customer');
+  assert.deepEqual(Object.keys(customerList.groups),['booster','staff']);
+  assert(!JSON.stringify(customerList).includes(token));
+  const categories=['Boosters Booster of the Year','Staff of the Year','Dev of the Year','Retard Moment of the Year','Boosters Customer of the Year'];
+  const id=people[0].user.id;
+  const selections=[id,id,id,'Moment',id];
+  let votes=await resolveNominees(env,'booster',categories,selections,fetcher);
+  assert.equal(votes[0].nomineeId,id);
+  assert.equal(votes[0].nomination,'Abdullah');
+  assert.equal(votes[0].nomineeUsername,'user0');
+  assert.equal(votes[3].nomination,'Moment');
+  assert.equal(calls.filter(url=>url.endsWith('/members/'+id)).length,1);
+  await assert.rejects(()=>resolveNominees(env,'booster',categories,['Zamen',...selections.slice(1)],fetcher),/eligible Discord member/);
+  rejectRole=true;
+  await assert.rejects(()=>resolveNominees(env,'booster',categories,selections,fetcher),/no longer has/);
+  const status=await(await adminDiscord(req('discord'),env,fetcher)).json();
+  assert.equal(status.hasToken,true);
+  assert(!JSON.stringify(status).includes(token));
+});
+
+test('Discord ID tallies combine renamed users while keeping different users with identical names separate', () => {
+  const votes=[
+    {category:'Staff of the Year',nomination:'Zamin',nomineeId:'30000000000000001'},
+    {category:'Staff of the Year',nomination:'Abdullah',nomineeId:'30000000000000001'},
+    {category:'Staff of the Year',nomination:'Zamin',nomineeId:'30000000000000002'},
+  ];
+  const results=tally(votes.map(v=>({role:'booster',votes:[v]})));
+  assert.deepEqual(results.find(r=>r.category==='Staff of the Year').nominees.map(n=>n.count),[2,1]);
 });
