@@ -65,6 +65,24 @@ test('missing admin configuration fails closed and empty storage returns zero st
   assert.equal((await call('/api/admin/votes', undefined, cookie)).status, 401);
 });
 
+test('configuration errors identify the exact missing secret without revealing values', async () => {
+  const { env, call } = fixture();
+  delete env.SESSION_SECRET;
+  let status = await (await call('/api/admin/session')).json();
+  assert.equal(status.configured, false);
+  assert.deepEqual(status.missingSecrets, ['SESSION_SECRET']);
+  let error = await (await call('/api/admin/login', { password: 'test-admin' })).json();
+  assert.match(error.error, /Missing Worker secrets: SESSION_SECRET\./);
+  assert(!error.error.includes('test-admin'));
+  env.SESSION_SECRET = 'restored';
+  delete env.ADMIN_PASSPHRASE;
+  status = await (await call('/api/admin/session')).json();
+  assert.deepEqual(status.missingSecrets, ['ADMIN_PASSPHRASE']);
+  delete env.SESSION_SECRET;
+  status = await (await call('/api/admin/session')).json();
+  assert.deepEqual(status.missingSecrets, ['ADMIN_PASSPHRASE', 'SESSION_SECRET']);
+});
+
 test('pagination returns every stored ballot, tallies normalize case/spacing, detect ties, and separate voter groups', async () => {
   const { records, call, login } = fixture();
   for (let i = 0; i < 61; i++) records.set('2026/booster/' + i + '.json', {
@@ -155,3 +173,4 @@ test('dashboard renders leaders, every vote, search and table pagination without
   assert.equal(nodes.get('votes-body').children.length, 30);
   assert.equal(nodes.get('page-label').textContent, 'Page 1 of 1');
 });
+

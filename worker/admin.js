@@ -14,6 +14,7 @@ const cookieFlags = '; HttpOnly; Secure; SameSite=Strict; Path=/api/admin/';
 const reply = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
 });
+const missingSecrets = env => ['ADMIN_PASSPHRASE', 'SESSION_SECRET'].filter(name => !env[name]);
 async function key(env) {
   return crypto.subtle.importKey('raw', encoder.encode(env.SESSION_SECRET + ':' + env.ADMIN_PASSPHRASE), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
@@ -37,9 +38,9 @@ export async function handleAdminRequest(req, env, publicPage) {
     } });
   }
   if (req.method === 'POST' && req.headers.get('origin') !== url.origin) return reply({ error: 'Request not allowed.' }, 403);
-  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: !!(env.ADMIN_PASSPHRASE && env.SESSION_SECRET) });
+  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env) });
   if (url.pathname === '/api/admin/login' && req.method === 'POST') {
-    if (!env.ADMIN_PASSPHRASE || !env.SESSION_SECRET) return reply({ error: 'Admin access is not configured. Add ADMIN_PASSPHRASE as a Cloudflare Worker secret.' }, 503);
+    if (missingSecrets(env).length) return reply({ error: 'Missing Worker secrets: ' + missingSecrets(env).join(', ') + '. Add them under Settings > Variables and Secrets, then deploy.' }, 503);
     const { password } = await req.json();
     if (typeof password !== 'string' || password !== env.ADMIN_PASSPHRASE) return reply({ error: 'Incorrect admin passphrase.' }, 401);
     const payload = crypto.randomUUID() + '.' + (Date.now() + 8 * 60 * 60 * 1000);
@@ -106,6 +107,6 @@ function renderAdminPage(publicPage) {
   async function loadVotes(){if(busy)return;busy=true;const run=++generation;$('refresh').disabled=true;$('data-error').textContent='';$('updated').textContent='Loading all ballots...';try{const collected=new Map();let cursor=null;const seen=new Set();do{const data=await api('votes'+(cursor?'?cursor='+encodeURIComponent(cursor):''));if(run!==generation)return;awards=data.awards;for(const ballot of data.ballots)collected.set(ballot.id,ballot);cursor=data.nextCursor;if(cursor&&seen.has(cursor))throw Error('Vote loading stopped unexpectedly. Please refresh.');if(cursor)seen.add(cursor);$('updated').textContent='Loading all ballots... '+collected.size+' loaded';}while(cursor);ballots=[...collected.values()].sort((a,b)=>String(b.submittedAt).localeCompare(String(a.submittedAt)));render();$('updated').textContent='Updated '+new Date().toLocaleTimeString();}catch(e){if(run!==generation)return;if(e.status===401){clearData();showDashboard(false);$('login-error').textContent='Your admin session expired. Please sign in again.';}else{$('data-error').textContent=e.message;$('updated').textContent=ballots.length?'Refresh failed; showing previous results.':'Results unavailable. Click Refresh votes to retry.';}}finally{busy=false;$('refresh').disabled=false;} }
   $('admin-form').onsubmit=async e=>{e.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{await api('login',{password:$('admin-password').value});$('admin-password').value='';showDashboard(true);await loadVotes();}catch(e){$('login-error').textContent=e.message;}finally{$('login-button').disabled=false;}};
   $('refresh').onclick=loadVotes;$('search').oninput=()=>{currentPage=0;renderTable();};$('previous').onclick=()=>{currentPage--;renderTable();};$('next').onclick=()=>{currentPage++;renderTable();};$('admin-logout').onclick=async()=>{try{await api('logout',{});clearData();showDashboard(false);}catch(e){$('data-error').textContent=e.message;}};
-  api('session').then(s=>{if(s.authenticated){showDashboard(true);loadVotes();}else if(!s.configured){$('login-error').textContent='Add ADMIN_PASSPHRASE as a Cloudflare Worker secret to enable admin access.';}}).catch(e=>{$('login-error').textContent=e.message;});
+  api('session').then(s=>{if(s.authenticated){showDashboard(true);loadVotes();}else if(!s.configured){$('login-error').textContent='Missing Worker secrets: '+(s.missingSecrets || ['ADMIN_PASSPHRASE', 'SESSION_SECRET']).join(', ')+'. Add them under Settings > Variables and Secrets, then deploy.';}}).catch(e=>{$('login-error').textContent=e.message;});
   </script></body></html>`;
 }
