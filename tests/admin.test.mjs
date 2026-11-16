@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import worker from '../worker/index.js';
+import { registerHooks } from 'node:module';
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === 'cloudflare:workers') return { url: 'test:cloudflare-workers', shortCircuit: true };
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url === 'test:cloudflare-workers') return { format: 'module', source: `export const env = new Proxy({}, { get: (_, key) => globalThis.__nativeWorkerBindings?.[key], has: (_, key) => key in (globalThis.__nativeWorkerBindings || {}), ownKeys: () => Reflect.ownKeys(globalThis.__nativeWorkerBindings || {}), getOwnPropertyDescriptor: () => ({configurable:true,enumerable:true}) });`, shortCircuit: true };
+    return nextLoad(url, context);
+  },
+});
+const { default: worker } = await import('../worker/index.js');
 import { tally } from '../worker/admin.js';
 import vm from 'node:vm';
 import { resolveBindings } from '../worker/bindings.js';
@@ -93,7 +104,7 @@ test('dashboard secret names with spaces and invisible characters work through t
   const status = await (await call('/api/admin/session')).json();
   assert.equal(status.configured, true);
   assert.deepEqual(status.secretStatus, { ADMIN_PASSPHRASE: 'available', SESSION_SECRET: 'available' });
-  assert.equal(status.build, 'binding-resolution-v2');
+  assert.equal(status.build, 'native-bindings-v3');
   assert.equal(status.voteStorageBound, true);
   const login = await call('/api/admin/login', { password: 'test-admin' });
   assert.equal(login.status, 200);
@@ -112,6 +123,27 @@ test('binding resolution preserves exact names and secret values and rejects amb
   assert.equal(status.configured, false);
   assert.equal(status.secretStatus.ADMIN_PASSPHRASE, 'empty');
   assert.equal((await call('/api/admin/login', { password: '' })).status, 503);
+});
+
+test('native Cloudflare env recovers secrets absent from the request environment', async () => {
+  const { env, call } = fixture();
+  globalThis.__nativeWorkerBindings = { ADMIN_PASSPHRASE: env.ADMIN_PASSPHRASE, SESSION_SECRET: env.SESSION_SECRET };
+  delete env.ADMIN_PASSPHRASE;
+  delete env.SESSION_SECRET;
+  try {
+    const status = await (await call('/api/admin/session')).json();
+    assert.equal(status.configured, true);
+    assert.equal(status.bindingSources.ADMIN_PASSPHRASE, 'native');
+    const login = await call('/api/admin/login', { password: 'test-admin' });
+    assert.equal(login.status, 200);
+    assert.equal((await call('/api/admin/votes', undefined, login.headers.get('set-cookie').split(';')[0])).status, 200);
+  } finally { delete globalThis.__nativeWorkerBindings; }
+});
+
+test('binding accessors are read using the original runtime object', () => {
+  const env = {};
+  Object.defineProperty(env, 'ADMIN_PASSPHRASE', { get() { assert.equal(this, env); return 'test-admin'; } });
+  assert.equal(resolveBindings(env).ADMIN_PASSPHRASE, 'test-admin');
 });
 
 test('pagination returns every stored ballot, tallies normalize case/spacing, detect ties, and separate voter groups', async () => {

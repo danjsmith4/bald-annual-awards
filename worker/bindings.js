@@ -3,16 +3,26 @@ const cleanName = name => name.normalize('NFKC').replace(/[\u200B-\u200D\u2060\u
 
 // Dashboard-created bindings may contain invisible whitespace in their names.
 // Match only our known settings; never alter secret VALUES or invent defaults.
-export function resolveBindings(source) {
+export function resolveBindings(source, nativeSource = {}) {
   const env = source && typeof source === 'object' ? source : {};
-  const resolved = Object.create(env);
-  const keys = Object.getOwnPropertyNames(env);
+  const native = nativeSource && typeof nativeSource === 'object' ? nativeSource : {};
+  const resolved = { ...env };
+  const sources = {};
   for (const name of names) {
-    if (name in env) continue;
-    const candidates = keys.filter(key => cleanName(key) === name);
-    // An exact name wins. Ambiguous aliases fail closed rather than guessing.
-    if (candidates.length === 1) resolved[name] = env[candidates[0]];
+    for (const [label, object] of [['request', env], ['native', native]]) {
+      // Read from the original receiver. Some runtime bindings are accessors.
+      if (name in object && object[name] !== undefined) {
+        resolved[name] = object[name]; sources[name] = label; break;
+      }
+      const candidates = Object.getOwnPropertyNames(object).filter(key => cleanName(key) === name);
+      // Ambiguous aliases fail closed rather than choosing a credential.
+      if (candidates.length > 1) break;
+      if (candidates.length === 1 && object[candidates[0]] !== undefined) {
+        resolved[name] = object[candidates[0]]; sources[name] = label + '-normalized'; break;
+      }
+    }
   }
+  Object.defineProperty(resolved, '__bindingSources', { value: sources });
   return resolved;
 }
 

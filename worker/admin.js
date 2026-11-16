@@ -39,7 +39,7 @@ export async function handleAdminRequest(req, env, publicPage) {
     } });
   }
   if (req.method === 'POST' && req.headers.get('origin') !== url.origin) return reply({ error: 'Request not allowed.' }, 403);
-  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env), secretStatus: bindingStatus(env), voteStorageBound: !!env.BALLOTS, build: 'binding-resolution-v2' });
+  if (url.pathname === '/api/admin/session' && req.method === 'GET') return reply({ authenticated: await isAdmin(req, env), configured: missingSecrets(env).length === 0, missingSecrets: missingSecrets(env), secretStatus: bindingStatus(env), voteStorageBound: !!env.BALLOTS, bindingSources: env.__bindingSources || {}, build: 'native-bindings-v3' });
   if (url.pathname === '/api/admin/login' && req.method === 'POST') {
     if (missingSecrets(env).length) return reply({ error: 'Missing Worker secrets: ' + missingSecrets(env).join(', ') + '. Add them under Settings > Variables and Secrets, then deploy.' }, 503);
     const { password } = await req.json();
